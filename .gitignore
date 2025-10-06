@@ -1,0 +1,22 @@
+# Executables
+a2p1
+a2p2
+a2p3
+# Output files
+*.csv
+!inputfile1.csv
+!test_input_small.csv
+mlfq_output.txt
+
+# Plots
+*.png
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor files
+*.swp
+*~
+.vscode/
+.DS_Store
