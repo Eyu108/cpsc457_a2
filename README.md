@@ -1,119 +1,164 @@
-# CPSC 457 Assignment 2: Processor Scheduling Algorithms
+# CPSC 457 Assignment 2: CPU Scheduling Simulators
 
-## Team Members
-- [Name 1] - [UCID]
-- [Name 2] - [UCID]
-*(Add all team member names and UCIDs)*
+## Student Information
+- **Name:** Eyuel Kahsay
+- **UCID:** 30181884
 
 ## Overview
-This assignment implements three CPU scheduling algorithm simulators:
-1. **First-Come-First-Served (FCFS)** with varying dispatcher latency
-2. **Round Robin (RR)** with varying quantum sizes
-3. **Multi-Level Feedback Queue (MLFQ)** with 3 priority queues
 
-## File Structure
+This assignment implements three CPU scheduling algorithms in C and compares their performance using a dataset of 1000 processes.
+
+**Algorithms Implemented:**
+1. **FCFS (First-Come-First-Served)** - Non-preemptive, processes run in arrival order
+2. **Round Robin** - Preemptive with time quantum, circular queue implementation
+3. **Multi-Level Feedback Queue** - Three priority queues (Q1: RR-40, Q2: RR-80, Q3: FCFS)
+
+## Repository Contents
+
 ```
-.
-├── a2p1.c                      # FCFS simulator
-├── a2p2.c                      # Round Robin simulator
-├── a2p3.c                      # MLFQ simulator
-├── inputfile1.csv              # Input data (1000 processes)
-├── plot_results.py             # Python script to generate plots
-├── Makefile                    # Build automation
-├── test_simulation.sh          # Testing script
-└── README.md                   # This file
+├── a2p1.c                    # FCFS scheduler
+├── a2p2.c                    # Round Robin scheduler
+├── a2p3.c                    # MLFQ scheduler
+├── inputfile1.csv            # Input data (1000 processes)
+├── Makefile                  # Build automation
+├── plot_results.py           # Visualization script
+├── test_simulation.sh        # Testing script
+└── README.md                 # This file
 ```
 
 ## Quick Start
 
-### Option 1: Using Makefile (Recommended)
+**Compile and run everything:**
 ```bash
-# Compile all programs
-make
-
-# Run all simulations
 make runall
+```
 
-# Generate plots
-make plots
+**Generate plots:**
+```bash
+python3 plot_results.py
+```
 
-# Clean up
+**Clean up:**
+```bash
 make clean
 ```
 
-### Option 2: Manual Compilation and Execution
+## Manual Execution
 
-**Part 1: FCFS**
 ```bash
+# Part 1: FCFS
 gcc -O2 a2p1.c -o a2p1
 ./a2p1 < inputfile1.csv
-```
 
-**Part 2: Round Robin**
-```bash
+# Part 2: Round Robin
 gcc -O2 a2p2.c -o a2p2
 ./a2p2 < inputfile1.csv
-```
 
-**Part 3: MLFQ**
-```bash
+# Part 3: MLFQ
 gcc -O2 a2p3.c -o a2p3
 ./a2p3 < inputfile1.csv
 ```
 
-### Option 3: Using Test Script
+## Algorithm Details
+
+### FCFS
+Tests dispatcher latency from 1-200 time units. Each latency value runs a complete simulation of all 1000 processes. Outputs detailed per-process results and summary metrics for each latency.
+
+**Key finding:** Performance degrades linearly with latency. Throughput drops from ~0.0097 at latency=1 to ~0.0033 at latency=200.
+
+### Round Robin
+Tests quantum sizes from 1-200 with fixed dispatcher latency of 20. Uses circular queue to manage ready processes.
+
+**Key finding:** Small quantums (1-10) cause excessive context switching. Sweet spot around 50-100. Large quantums (150+) behave like FCFS.
+
+### MLFQ
+Three-level priority queue system. New processes start in Q1. If they don't finish within the quantum, they demote to the next queue.
+- Q1: RR with quantum=40 (highest priority)
+- Q2: RR with quantum=80
+- Q3: FCFS (lowest priority)
+
+**Key finding:** Balances interactive and batch processes. Short processes complete quickly in Q1, long processes settle in Q3.
+
+## Output Files
+
+**FCFS:**
+- `fcfs_results.csv` - Summary metrics (201 rows: header + 200 latencies)
+- `fcfs_results_details.csv` - Per-process results (200,001 rows)
+
+**Round Robin:**
+- `rr_results.csv` - Summary metrics (201 rows: header + 200 quantums)
+- `rr_results_details.csv` - Per-process results (200,001 rows)
+
+**MLFQ:**
+- Terminal output with final metrics
+
+## Implementation Notes
+
+### Important Details
+- Dispatcher latency added BEFORE each process execution (as specified)
+- Tie-breaking by process ID when arrival times are equal
+- Response time taken directly from input data
+- New arrivals checked after each execution slice (critical for RR/MLFQ)
+
+### Challenges Solved
+- **Queue management:** Ensuring new arrivals get added at the right time during execution
+- **MLFQ priority:** Always check Q1→Q2→Q3 in order
+- **Timing calculations:** Start time must account for dispatcher latency
+
+## Testing
+
+Run the automated test script:
 ```bash
 chmod +x test_simulation.sh
 ./test_simulation.sh
 ```
 
-## Output Files
+Verifies compilation, execution, and output file correctness.
 
-### Part 1 (FCFS)
-- `fcfs_results.csv` - Summary metrics for each latency (1-200)
-- `fcfs_results_details.csv` - Detailed per-process results for each latency
+## Plots
 
-### Part 2 (Round Robin)
-- `rr_results.csv` - Summary metrics for each quantum size (1-200)
-- `rr_results_details.csv` - Detailed per-process results for each quantum
+The Python script generates 4 visualization files:
+- `fcfs_plot.png` - FCFS metrics vs latency
+- `fcfs_combined_plot.png` - All FCFS metrics on one graph
+- `rr_plot.png` - RR metrics vs quantum
+- `rr_combined_plot.png` - All RR metrics on one graph
 
-### Part 3 (MLFQ)
-- Terminal output with final metrics
+**Requirements:** `matplotlib`, `pandas`, `numpy`
+```bash
+pip3 install matplotlib pandas numpy
+```
 
-### Plots
-- `fcfs_plot.png` - FCFS individual metric plots
-- `fcfs_combined_plot.png` - FCFS all metrics on one graph
-- `rr_plot.png` - RR individual metric plots
-- `rr_combined_plot.png` - RR all metrics on one graph
+## Performance Results
 
-## Implementation Details
+| Algorithm | Throughput | Avg Wait Time | Notes |
+|-----------|------------|---------------|-------|
+| FCFS (latency=1) | 0.009710 | 48,947 | Best case |
+| FCFS (latency=200) | 0.003311 | 148,547 | Worst case |
+| RR (quantum=1) | 0.000467 | 1,427,847 | Too much overhead |
+| RR (quantum=200) | 0.008197 | 58,457 | Approaching FCFS |
+| MLFQ | 0.006835 | 92,759 | Balanced approach |
 
-### Part 1: FCFS Algorithm
-- Non-preemptive scheduling
-- Processes executed in arrival order
-- Dispatcher latency ranges from 1 to 200 time units
-- Ties broken by process ID (lower ID first)
+## Running on University Servers
 
-**Key Metrics Calculated:**
-- Throughput: processes/time unit
-- Average Waiting Time
-- Average Turnaround Time
-- Average Response Time
+Tested and verified on cslinux.ucalgary.ca:
+```bash
+ssh eyuel.kahsay@cslinux.ucalgary.ca
+cd cpsc457_a2
+make runall
+```
 
-### Part 2: Round Robin Algorithm
-- Preemptive scheduling with time quantum
-- Fixed dispatcher latency of 20 time units
-- Quantum size varies from 1 to 200 time units
-- Ready queue implemented as circular queue
+## Submission Checklist
 
-**Algorithm Flow:**
-1. New processes enter ready queue
-2. Process at front of queue executes for quantum or until completion
-3. If not completed, process moves to back of queue
-4. Repeat until all processes complete
+- [x] All programs compile without warnings
+- [x] Programs run correctly on university servers
+- [x] Output format matches specification
+- [x] Git repository with commit history
+- [x] Code is commented and organized
+- [x] Plots generated and included in PDF report
+- [x] Reflections written for all three parts
 
-### Part 3: Multi-Level Feedback Queue
-- Three-level priority queue system:
-  - **Q1**: RR with quantum = 40 (highest priority)
-  - **Q2**: RR with quantum = 80 (medium priority)
-  - **Q3**:
+## References
+
+- CPSC 457 Lecture Slides (CPU Scheduling)
+- Operating System Concepts - Silberschatz, Galvin, Gagne
+- Assignment 2 Specification Document
