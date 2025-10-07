@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_PROCESSES 1000
+#define MAX_THREADS 1000
+#define MAX_PROCESSES 50
 #define MAX_LINE 256
 
 typedef struct {
@@ -12,23 +13,32 @@ typedef struct {
     int burst_length;
     int start_time;
     int finish_time;
+    int first_response_time;
+} Thread;
+
+typedef struct {
+    int pid;
+    int earliest_arrival;
+    int latest_finish;
+    int first_start;
+    int total_burst;
     int turnaround_time;
     int waiting_time;
     int response_time;
+    int has_response;
 } Process;
 
-// Function to parse CSV line
-int parse_line(char *line, Process *p) {
+int parse_line(char *line, Thread *t) {
     char *token;
     int field = 0;
     
     token = strtok(line, ",");
     while (token != NULL && field < 4) {
         switch(field) {
-            case 0: p->pid = atoi(token); break;
-            case 1: p->arrival_time = atoi(token); break;
-            case 2: p->time_until_first_response = atoi(token); break;
-            case 3: p->burst_length = atoi(token); break;
+            case 0: t->pid = atoi(token); break;
+            case 1: t->arrival_time = atoi(token); break;
+            case 2: t->time_until_first_response = atoi(token); break;
+            case 3: t->burst_length = atoi(token); break;
         }
         token = strtok(NULL, ",");
         field++;
@@ -36,44 +46,103 @@ int parse_line(char *line, Process *p) {
     return field == 4;
 }
 
-// FCFS simulation
-void simulate_fcfs(Process processes[], int n, int latency) {
+void simulate_fcfs(Thread threads[], int n, int latency) {
     int current_time = 0;
     
     for (int i = 0; i < n; i++) {
-        // Wait for process to arrive if CPU is idle
-        if (current_time < processes[i].arrival_time) {
-            current_time = processes[i].arrival_time;
+        // Wait for thread to arrive if CPU idle
+        if (current_time < threads[i].arrival_time) {
+            current_time = threads[i].arrival_time;
         }
         
         // Add dispatcher latency
         current_time += latency;
         
-        // Start time is when process actually begins execution
-        processes[i].start_time = current_time;
+        // Start execution
+        threads[i].start_time = current_time;
         
-        // Execute the process
-        current_time += processes[i].burst_length;
+        // Calculate first response time
+        threads[i].first_response_time = current_time + threads[i].time_until_first_response;
+        
+        // Execute the thread
+        current_time += threads[i].burst_length;
         
         // Finish time
-        processes[i].finish_time = current_time;
-        
-        // Calculate metrics
-        processes[i].turnaround_time = processes[i].finish_time - processes[i].arrival_time;
-        processes[i].waiting_time = processes[i].start_time - processes[i].arrival_time;
-        processes[i].response_time = processes[i].time_until_first_response;
+        threads[i].finish_time = current_time;
     }
 }
 
-// Calculate and write results for specific latency
-void write_detail_results(FILE *fp, int latency, Process processes[], int n) {
+void aggregate_by_pid(Thread threads[], int n, Process processes[], int *num_processes) {
+    *num_processes = 0;
+    
+    // Initialize all processes as not found
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        processes[i].pid = -1;
+        processes[i].has_response = 0;
+        processes[i].first_start = -1;
+    }
+    
+    // Aggregate threads by PID
     for (int i = 0; i < n; i++) {
+        int pid = threads[i].pid;
+        
+        // Find or create process entry
+        int proc_idx = -1;
+        for (int j = 0; j < *num_processes; j++) {
+            if (processes[j].pid == pid) {
+                proc_idx = j;
+                break;
+            }
+        }
+        
+        if (proc_idx == -1) {
+            // New process
+            proc_idx = *num_processes;
+            processes[proc_idx].pid = pid;
+            processes[proc_idx].earliest_arrival = threads[i].arrival_time;
+            processes[proc_idx].latest_finish = threads[i].finish_time;
+            processes[proc_idx].first_start = threads[i].start_time;
+            processes[proc_idx].total_burst = threads[i].burst_length;
+            processes[proc_idx].response_time = threads[i].first_response_time - threads[i].arrival_time;
+            processes[proc_idx].has_response = 1;
+            (*num_processes)++;
+        } else {
+            // Update existing process
+            if (threads[i].arrival_time < processes[proc_idx].earliest_arrival) {
+                processes[proc_idx].earliest_arrival = threads[i].arrival_time;
+            }
+            if (threads[i].finish_time > processes[proc_idx].latest_finish) {
+                processes[proc_idx].latest_finish = threads[i].finish_time;
+            }
+            if (processes[proc_idx].first_start == -1 || threads[i].start_time < processes[proc_idx].first_start) {
+                processes[proc_idx].first_start = threads[i].start_time;
+            }
+            processes[proc_idx].total_burst += threads[i].burst_length;
+            
+            // Update response time if this thread has earlier first response
+            int thread_response = threads[i].first_response_time - processes[proc_idx].earliest_arrival;
+            if (!processes[proc_idx].has_response || thread_response < processes[proc_idx].response_time) {
+                processes[proc_idx].response_time = thread_response;
+                processes[proc_idx].has_response = 1;
+            }
+        }
+    }
+    
+    // Calculate turnaround and waiting for each process
+    for (int i = 0; i < *num_processes; i++) {
+        processes[i].turnaround_time = processes[i].latest_finish - processes[i].earliest_arrival;
+        processes[i].waiting_time = processes[i].turnaround_time - processes[i].total_burst;
+    }
+}
+
+void write_detail_results(FILE *fp, int latency, Process processes[], int num_processes) {
+    for (int i = 0; i < num_processes; i++) {
         fprintf(fp, "%d,%d,%d,%d,%d,%d,%d,%d\n",
                 latency,
                 processes[i].pid,
-                processes[i].arrival_time,
-                processes[i].start_time,
-                processes[i].finish_time,
+                processes[i].earliest_arrival,
+                processes[i].first_start,
+                processes[i].latest_finish,
                 processes[i].turnaround_time,
                 processes[i].waiting_time,
                 processes[i].response_time);
@@ -81,7 +150,7 @@ void write_detail_results(FILE *fp, int latency, Process processes[], int n) {
 }
 
 int main() {
-    Process processes[MAX_PROCESSES];
+    Thread threads[MAX_THREADS];
     int n = 0;
     char line[MAX_LINE];
     
@@ -91,19 +160,19 @@ int main() {
         return 1;
     }
     
-    // Read all processes
-    while (fgets(line, MAX_LINE, stdin) != NULL && n < MAX_PROCESSES) {
-        if (parse_line(line, &processes[n])) {
+    // Read all threads
+    while (fgets(line, MAX_LINE, stdin) != NULL && n < MAX_THREADS) {
+        if (parse_line(line, &threads[n])) {
             n++;
         }
     }
     
     if (n == 0) {
-        fprintf(stderr, "No processes read\n");
+        fprintf(stderr, "No threads read\n");
         return 1;
     }
     
-    printf("Read %d processes\n", n);
+    printf("Read %d threads\n", n);
     
     // Open output files
     FILE *detail_fp = fopen("fcfs_results_details.csv", "w");
@@ -120,33 +189,38 @@ int main() {
     
     // Run simulations for latency 1 to 200
     for (int latency = 1; latency <= 200; latency++) {
-        // Create a copy of processes for this simulation
-        Process sim_processes[MAX_PROCESSES];
-        memcpy(sim_processes, processes, n * sizeof(Process));
+        // Create a copy of threads for this simulation
+        Thread sim_threads[MAX_THREADS];
+        memcpy(sim_threads, threads, n * sizeof(Thread));
         
         // Run simulation
-        simulate_fcfs(sim_processes, n, latency);
+        simulate_fcfs(sim_threads, n, latency);
         
-        // Write detailed results for this latency
-        write_detail_results(detail_fp, latency, sim_processes, n);
+        // Aggregate by PID
+        Process processes[MAX_PROCESSES];
+        int num_processes = 0;
+        aggregate_by_pid(sim_threads, n, processes, &num_processes);
         
-        // Calculate average metrics
+        // Write detailed results
+        write_detail_results(detail_fp, latency, processes, num_processes);
+        
+        // Calculate average metrics over PROCESSES (not threads)
         double total_waiting = 0, total_turnaround = 0, total_response = 0;
         int max_finish_time = 0;
         
-        for (int i = 0; i < n; i++) {
-            total_waiting += sim_processes[i].waiting_time;
-            total_turnaround += sim_processes[i].turnaround_time;
-            total_response += sim_processes[i].response_time;
-            if (sim_processes[i].finish_time > max_finish_time) {
-                max_finish_time = sim_processes[i].finish_time;
+        for (int i = 0; i < num_processes; i++) {
+            total_waiting += processes[i].waiting_time;
+            total_turnaround += processes[i].turnaround_time;
+            total_response += processes[i].response_time;
+            if (processes[i].latest_finish > max_finish_time) {
+                max_finish_time = processes[i].latest_finish;
             }
         }
         
-        double avg_waiting = total_waiting / n;
-        double avg_turnaround = total_turnaround / n;
-        double avg_response = total_response / n;
-        double throughput = (double)n / max_finish_time;
+        double avg_waiting = total_waiting / num_processes;
+        double avg_turnaround = total_turnaround / num_processes;
+        double avg_response = total_response / num_processes;
+        double throughput = (double)num_processes / max_finish_time;
         
         // Write summary results
         fprintf(summary_fp, "%d,%.6f,%.2f,%.2f,%.2f\n",
@@ -162,7 +236,7 @@ int main() {
     fclose(detail_fp);
     fclose(summary_fp);
     
-    printf("\nSimulation completed! Process table results saved to fcfs_results_detail.csv\n");
+    printf("\nSimulation completed! Process table results saved to fcfs_results_details.csv\n");
     printf("Average results saved to fcfs_results.csv\n");
     
     return 0;

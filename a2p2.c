@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_PROCESSES 1000
+#define MAX_THREADS 1000
+#define MAX_PROCESSES 50
 #define MAX_LINE 256
 #define LATENCY 20
 
@@ -14,14 +15,25 @@ typedef struct {
     int remaining_time;
     int start_time;
     int finish_time;
+    int first_response_time;
+    int first_run;
+    int response_happened;
+} Thread;
+
+typedef struct {
+    int pid;
+    int earliest_arrival;
+    int latest_finish;
+    int first_start;
+    int total_burst;
     int turnaround_time;
     int waiting_time;
     int response_time;
-    int first_run;
+    int has_response;
 } Process;
 
 typedef struct {
-    int process_idx[MAX_PROCESSES];
+    int thread_idx[MAX_THREADS];
     int front;
     int rear;
     int size;
@@ -34,15 +46,15 @@ void init_queue(Queue *q) {
 }
 
 void enqueue(Queue *q, int idx) {
-    q->rear = (q->rear + 1) % MAX_PROCESSES;
-    q->process_idx[q->rear] = idx;
+    q->rear = (q->rear + 1) % MAX_THREADS;
+    q->thread_idx[q->rear] = idx;
     q->size++;
 }
 
 int dequeue(Queue *q) {
     if (q->size == 0) return -1;
-    int idx = q->process_idx[q->front];
-    q->front = (q->front + 1) % MAX_PROCESSES;
+    int idx = q->thread_idx[q->front];
+    q->front = (q->front + 1) % MAX_THREADS;
     q->size--;
     return idx;
 }
@@ -51,17 +63,17 @@ int is_empty(Queue *q) {
     return q->size == 0;
 }
 
-int parse_line(char *line, Process *p) {
+int parse_line(char *line, Thread *t) {
     char *token;
     int field = 0;
     
     token = strtok(line, ",");
     while (token != NULL && field < 4) {
         switch(field) {
-            case 0: p->pid = atoi(token); break;
-            case 1: p->arrival_time = atoi(token); break;
-            case 2: p->time_until_first_response = atoi(token); break;
-            case 3: p->burst_length = atoi(token); break;
+            case 0: t->pid = atoi(token); break;
+            case 1: t->arrival_time = atoi(token); break;
+            case 2: t->time_until_first_response = atoi(token); break;
+            case 3: t->burst_length = atoi(token); break;
         }
         token = strtok(NULL, ",");
         field++;
@@ -69,7 +81,7 @@ int parse_line(char *line, Process *p) {
     return field == 4;
 }
 
-void simulate_rr(Process processes[], int n, int quantum) {
+void simulate_rr(Thread threads[], int n, int quantum) {
     Queue ready_queue;
     init_queue(&ready_queue);
     
@@ -77,15 +89,17 @@ void simulate_rr(Process processes[], int n, int quantum) {
     int completed = 0;
     int next_arrival_idx = 0;
     
-    // Initialize processes
+    // Initialize threads
     for (int i = 0; i < n; i++) {
-        processes[i].remaining_time = processes[i].burst_length;
-        processes[i].first_run = 1;
-        processes[i].start_time = -1;
+        threads[i].remaining_time = threads[i].burst_length;
+        threads[i].first_run = 1;
+        threads[i].start_time = -1;
+        threads[i].response_happened = 0;
+        threads[i].first_response_time = -1;
     }
     
-    // Add first process(es) that arrive at time 0
-    while (next_arrival_idx < n && processes[next_arrival_idx].arrival_time <= current_time) {
+    // Add threads that arrive at time 0
+    while (next_arrival_idx < n && threads[next_arrival_idx].arrival_time <= current_time) {
         enqueue(&ready_queue, next_arrival_idx);
         next_arrival_idx++;
     }
@@ -94,8 +108,8 @@ void simulate_rr(Process processes[], int n, int quantum) {
         if (is_empty(&ready_queue)) {
             // CPU idle, jump to next arrival
             if (next_arrival_idx < n) {
-                current_time = processes[next_arrival_idx].arrival_time;
-                while (next_arrival_idx < n && processes[next_arrival_idx].arrival_time <= current_time) {
+                current_time = threads[next_arrival_idx].arrival_time;
+                while (next_arrival_idx < n && threads[next_arrival_idx].arrival_time <= current_time) {
                     enqueue(&ready_queue, next_arrival_idx);
                     next_arrival_idx++;
                 }
@@ -106,50 +120,121 @@ void simulate_rr(Process processes[], int n, int quantum) {
         // Add dispatcher latency
         current_time += LATENCY;
         
-        // Get next process from queue
+        // Get next thread from queue
         int idx = dequeue(&ready_queue);
         
         // Record start time if first run
-        if (processes[idx].first_run) {
-            processes[idx].start_time = current_time;
-            processes[idx].first_run = 0;
+        if (threads[idx].first_run) {
+            threads[idx].start_time = current_time;
+            threads[idx].first_run = 0;
         }
         
         // Execute for quantum or remaining time, whichever is smaller
-        int exec_time = (processes[idx].remaining_time < quantum) ? 
-                        processes[idx].remaining_time : quantum;
+        int exec_time = (threads[idx].remaining_time < quantum) ? 
+                        threads[idx].remaining_time : quantum;
         
-        processes[idx].remaining_time -= exec_time;
+        // Check if response happens during this execution
+        if (!threads[idx].response_happened && 
+            threads[idx].time_until_first_response < exec_time) {
+            threads[idx].first_response_time = current_time + threads[idx].time_until_first_response;
+            threads[idx].response_happened = 1;
+        }
+        
+        threads[idx].remaining_time -= exec_time;
         current_time += exec_time;
         
         // Check for new arrivals during execution
-        while (next_arrival_idx < n && processes[next_arrival_idx].arrival_time <= current_time) {
+        while (next_arrival_idx < n && threads[next_arrival_idx].arrival_time <= current_time) {
             enqueue(&ready_queue, next_arrival_idx);
             next_arrival_idx++;
         }
         
-        // Check if process completed
-        if (processes[idx].remaining_time == 0) {
-            processes[idx].finish_time = current_time;
-            processes[idx].turnaround_time = processes[idx].finish_time - processes[idx].arrival_time;
-            processes[idx].waiting_time = processes[idx].turnaround_time - processes[idx].burst_length;
-            processes[idx].response_time = processes[idx].time_until_first_response;
+        // Check if thread completed
+        if (threads[idx].remaining_time == 0) {
+            threads[idx].finish_time = current_time;
+            // If response never happened, set it to finish time
+            if (!threads[idx].response_happened) {
+                threads[idx].first_response_time = current_time;
+            }
             completed++;
         } else {
-            // Process not finished, add back to queue
+            // Thread not finished, add back to queue
             enqueue(&ready_queue, idx);
         }
     }
 }
 
-void write_detail_results(FILE *fp, int quantum, Process processes[], int n) {
+void aggregate_by_pid(Thread threads[], int n, Process processes[], int *num_processes) {
+    *num_processes = 0;
+    
+    // Initialize all processes as not found
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        processes[i].pid = -1;
+        processes[i].has_response = 0;
+        processes[i].first_start = -1;
+    }
+    
+    // Aggregate threads by PID
     for (int i = 0; i < n; i++) {
+        int pid = threads[i].pid;
+        
+        // Find or create process entry
+        int proc_idx = -1;
+        for (int j = 0; j < *num_processes; j++) {
+            if (processes[j].pid == pid) {
+                proc_idx = j;
+                break;
+            }
+        }
+        
+        if (proc_idx == -1) {
+            // New process
+            proc_idx = *num_processes;
+            processes[proc_idx].pid = pid;
+            processes[proc_idx].earliest_arrival = threads[i].arrival_time;
+            processes[proc_idx].latest_finish = threads[i].finish_time;
+            processes[proc_idx].first_start = threads[i].start_time;
+            processes[proc_idx].total_burst = threads[i].burst_length;
+            processes[proc_idx].response_time = threads[i].first_response_time - threads[i].arrival_time;
+            processes[proc_idx].has_response = 1;
+            (*num_processes)++;
+        } else {
+            // Update existing process
+            if (threads[i].arrival_time < processes[proc_idx].earliest_arrival) {
+                processes[proc_idx].earliest_arrival = threads[i].arrival_time;
+            }
+            if (threads[i].finish_time > processes[proc_idx].latest_finish) {
+                processes[proc_idx].latest_finish = threads[i].finish_time;
+            }
+            if (processes[proc_idx].first_start == -1 || threads[i].start_time < processes[proc_idx].first_start) {
+                processes[proc_idx].first_start = threads[i].start_time;
+            }
+            processes[proc_idx].total_burst += threads[i].burst_length;
+            
+            // Update response time if this thread has earlier first response
+            int thread_response = threads[i].first_response_time - processes[proc_idx].earliest_arrival;
+            if (!processes[proc_idx].has_response || thread_response < processes[proc_idx].response_time) {
+                processes[proc_idx].response_time = thread_response;
+                processes[proc_idx].has_response = 1;
+            }
+        }
+    }
+    
+    // Calculate turnaround and waiting for each process
+    for (int i = 0; i < *num_processes; i++) {
+        processes[i].turnaround_time = processes[i].latest_finish - processes[i].earliest_arrival;
+        processes[i].waiting_time = processes[i].turnaround_time - processes[i].total_burst;
+    }
+}
+
+void write_detail_results(FILE *fp, int quantum, Process processes[], int num_processes) {
+    for (int i = 0; i < num_processes; i++) {
         fprintf(fp, "%d,%d,%d,%d,%d,%d,%d,%d\n",
                 quantum,
                 processes[i].pid,
-                processes[i].arrival_time,
-                processes[i].start_time,
-                processes[i].finish_time,
+                processes[i].earliest_arrival,
+                processes[i].first_start,
+                processes[i].latest_finish,
                 processes[i].turnaround_time,
                 processes[i].waiting_time,
                 processes[i].response_time);
@@ -157,7 +242,7 @@ void write_detail_results(FILE *fp, int quantum, Process processes[], int n) {
 }
 
 int main() {
-    Process processes[MAX_PROCESSES];
+    Thread threads[MAX_THREADS];
     int n = 0;
     char line[MAX_LINE];
     
@@ -167,19 +252,19 @@ int main() {
         return 1;
     }
     
-    // Read all processes
-    while (fgets(line, MAX_LINE, stdin) != NULL && n < MAX_PROCESSES) {
-        if (parse_line(line, &processes[n])) {
+    // Read all threads
+    while (fgets(line, MAX_LINE, stdin) != NULL && n < MAX_THREADS) {
+        if (parse_line(line, &threads[n])) {
             n++;
         }
     }
     
     if (n == 0) {
-        fprintf(stderr, "No processes read\n");
+        fprintf(stderr, "No threads read\n");
         return 1;
     }
     
-    printf("Read %d processes\n", n);
+    printf("Read %d threads\n", n);
     
     // Open output files
     FILE *detail_fp = fopen("rr_results_details.csv", "w");
@@ -196,33 +281,38 @@ int main() {
     
     // Run simulations for quantum 1 to 200
     for (int quantum = 1; quantum <= 200; quantum++) {
-        // Create a copy of processes for this simulation
-        Process sim_processes[MAX_PROCESSES];
-        memcpy(sim_processes, processes, n * sizeof(Process));
+        // Create a copy of threads for this simulation
+        Thread sim_threads[MAX_THREADS];
+        memcpy(sim_threads, threads, n * sizeof(Thread));
         
         // Run simulation
-        simulate_rr(sim_processes, n, quantum);
+        simulate_rr(sim_threads, n, quantum);
+        
+        // Aggregate by PID
+        Process processes[MAX_PROCESSES];
+        int num_processes = 0;
+        aggregate_by_pid(sim_threads, n, processes, &num_processes);
         
         // Write detailed results
-        write_detail_results(detail_fp, quantum, sim_processes, n);
+        write_detail_results(detail_fp, quantum, processes, num_processes);
         
-        // Calculate average metrics
+        // Calculate average metrics over PROCESSES (not threads)
         double total_waiting = 0, total_turnaround = 0, total_response = 0;
         int max_finish_time = 0;
         
-        for (int i = 0; i < n; i++) {
-            total_waiting += sim_processes[i].waiting_time;
-            total_turnaround += sim_processes[i].turnaround_time;
-            total_response += sim_processes[i].response_time;
-            if (sim_processes[i].finish_time > max_finish_time) {
-                max_finish_time = sim_processes[i].finish_time;
+        for (int i = 0; i < num_processes; i++) {
+            total_waiting += processes[i].waiting_time;
+            total_turnaround += processes[i].turnaround_time;
+            total_response += processes[i].response_time;
+            if (processes[i].latest_finish > max_finish_time) {
+                max_finish_time = processes[i].latest_finish;
             }
         }
         
-        double avg_waiting = total_waiting / n;
-        double avg_turnaround = total_turnaround / n;
-        double avg_response = total_response / n;
-        double throughput = (double)n / max_finish_time;
+        double avg_waiting = total_waiting / num_processes;
+        double avg_turnaround = total_turnaround / num_processes;
+        double avg_response = total_response / num_processes;
+        double throughput = (double)num_processes / max_finish_time;
         
         // Write summary results
         fprintf(summary_fp, "%d,%.6f,%.2f,%.2f,%.2f\n",
@@ -239,7 +329,7 @@ int main() {
     fclose(summary_fp);
     
     printf("\nRR simulation completed! Results saved to rr_results.csv\n");
-    printf("Average results saved to rr_results_detail.csv\n");
+    printf("Average results saved to rr_results_details.csv\n");
     
     return 0;
 }
