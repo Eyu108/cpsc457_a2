@@ -6,44 +6,87 @@
 
 ## Overview
 
-This assignment implements three CPU scheduling algorithms in C and compares their performance using a dataset of 1000 processes.
+This assignment implements three CPU scheduling algorithms in C to compare their performance. The key challenge was properly aggregating threads by process ID (PID) rather than treating each thread as a separate process.
 
-**Algorithms Implemented:**
-1. **FCFS (First-Come-First-Served)** - Non-preemptive, processes run in arrival order
-2. **Round Robin** - Preemptive with time quantum, circular queue implementation
-3. **Multi-Level Feedback Queue** - Three priority queues (Q1: RR-40, Q2: RR-80, Q3: FCFS)
+**Algorithms:**
+1. **FCFS** - Non-preemptive, processes execute in arrival order
+2. **Round Robin** - Preemptive with time quantum, uses circular queue
+3. **MLFQ** - Three priority levels with different scheduling policies
 
-## Repository Contents
+## Quick Start
+
+```bash
+# Compile and run everything
+make runall
+
+# Generate plots
+python3 plot_results.py
+
+# Clean up
+make clean
+```
+
+## Files
 
 ```
 ├── a2p1.c                    # FCFS scheduler
 ├── a2p2.c                    # Round Robin scheduler
 ├── a2p3.c                    # MLFQ scheduler
-├── inputfile1.csv            # Input data (1000 processes)
-├── Makefile                  # Build automation
-├── plot_results.py           # Visualization script
-├── test_simulation.sh        # Testing script
+├── inputfile1.csv            # Input data (1000 threads, 50 processes)
+├── Makefile                  # Build system
+├── plot_results.py           # Generates plots
+├── test_simulation.sh        # Automated testing
 └── README.md                 # This file
 ```
 
-## Quick Start
+## Implementation Details
 
-**Compile and run everything:**
-```bash
-make runall
+### The PID Aggregation Problem
+
+The biggest challenge was understanding that the input file contains **1000 threads** across **50 processes** (PIDs 1-50), not 1000 separate processes. Each PID can have multiple threads that need to be aggregated into per-process metrics.
+
+**Per-Process Metrics:**
+- **Turnaround Time** = Latest thread finish - Earliest thread arrival (for that PID)
+- **Waiting Time** = Turnaround - Sum of all thread burst times (for that PID)
+- **Response Time** = Earliest first response - Earliest arrival (for that PID)
+
+The averages are then calculated over the 50 unique processes, not the 1000 threads.
+
+### FCFS Implementation
+
+Tests dispatcher latency from 1-200 time units. For each latency value, runs a complete simulation of all threads, then aggregates by PID to get per-process metrics.
+
+**Key finding:** Performance degrades linearly with latency. As overhead increases, throughput drops proportionally since we're adding latency before each thread execution.
+
+### Round Robin Implementation
+
+Tests quantum sizes 1-200 with fixed dispatcher latency of 20. Uses a circular queue for ready processes.
+
+**Key finding:** Very small quantums (1-10) have terrible performance due to constant context switching. The sweet spot for this workload seems to be around 50-100. Beyond ~150, it starts behaving more like FCFS since most threads complete in one quantum.
+
+### MLFQ Implementation
+
+Three queues with decreasing priority:
+- **Q1:** Quantum=40 (highest priority)
+- **Q2:** Quantum=80 (medium priority)
+- **Q3:** FCFS (lowest priority)
+
+New threads always enter Q1. If they don't finish within their quantum, they demote to the next queue. This gives short processes better response time while still completing long-running processes.
+
+**Implementation note:** Always check Q1→Q2→Q3 in that order, and remember to check for new arrivals after each execution slice to maintain proper priority.
+
+## Response Time Calculation
+
+This was tricky. The "Time until first Response" column in the input is when the response happens **during execution**, not from arrival. So:
+
+```
+First Response Time (FRT) = Start Time + Time_until_first_Response
+Response Time = FRT - Arrival Time
 ```
 
-**Generate plots:**
-```bash
-python3 plot_results.py
-```
+For processes with multiple threads, we use the earliest FRT across all threads minus the earliest arrival time for that PID.
 
-**Clean up:**
-```bash
-make clean
-```
-
-## Manual Execution
+## Running Individual Parts
 
 ```bash
 # Part 1: FCFS
@@ -59,106 +102,111 @@ gcc -O2 a2p3.c -o a2p3
 ./a2p3 < inputfile1.csv
 ```
 
-## Algorithm Details
-
-### FCFS
-Tests dispatcher latency from 1-200 time units. Each latency value runs a complete simulation of all 1000 processes. Outputs detailed per-process results and summary metrics for each latency.
-
-**Key finding:** Performance degrades linearly with latency. Throughput drops from ~0.0097 at latency=1 to ~0.0033 at latency=200.
-
-### Round Robin
-Tests quantum sizes from 1-200 with fixed dispatcher latency of 20. Uses circular queue to manage ready processes.
-
-**Key finding:** Small quantums (1-10) cause excessive context switching. Sweet spot around 50-100. Large quantums (150+) behave like FCFS.
-
-### MLFQ
-Three-level priority queue system. New processes start in Q1. If they don't finish within the quantum, they demote to the next queue.
-- Q1: RR with quantum=40 (highest priority)
-- Q2: RR with quantum=80
-- Q3: FCFS (lowest priority)
-
-**Key finding:** Balances interactive and batch processes. Short processes complete quickly in Q1, long processes settle in Q3.
-
 ## Output Files
 
 **FCFS:**
-- `fcfs_results.csv` - Summary metrics (201 rows: header + 200 latencies)
-- `fcfs_results_details.csv` - Per-process results (200,001 rows)
+- `fcfs_results_details.csv` - Per-process results for each latency (10,000 rows: 200 latencies × 50 processes)
+- `fcfs_results.csv` - Average metrics per latency (200 rows)
 
 **Round Robin:**
-- `rr_results.csv` - Summary metrics (201 rows: header + 200 quantums)
-- `rr_results_details.csv` - Per-process results (200,001 rows)
+- `rr_results_details.csv` - Per-process results for each quantum (10,000 rows)
+- `rr_results.csv` - Average metrics per quantum (200 rows)
 
 **MLFQ:**
-- Terminal output with final metrics
-
-## Implementation Notes
-
-### Important Details
-- Dispatcher latency added BEFORE each process execution (as specified)
-- Tie-breaking by process ID when arrival times are equal
-- Response time taken directly from input data
-- New arrivals checked after each execution slice (critical for RR/MLFQ)
-
-### Challenges Solved
-- **Queue management:** Ensuring new arrivals get added at the right time during execution
-- **MLFQ priority:** Always check Q1→Q2→Q3 in order
-- **Timing calculations:** Start time must account for dispatcher latency
+- Terminal output with final averaged metrics
 
 ## Testing
 
-Run the automated test script:
+Used the TA's small test case (5 threads, 4 PIDs) to verify the logic:
+
 ```bash
-chmod +x test_simulation.sh
-./test_simulation.sh
+gcc -O2 a2p1.c -o a2p1
+./a2p1 < test_input_small.csv
 ```
 
-Verifies compilation, execution, and output file correctness.
-
-## Plots
-
-The Python script generates 4 visualization files:
-- `fcfs_plot.png` - FCFS metrics vs latency
-- `fcfs_combined_plot.png` - All FCFS metrics on one graph
-- `rr_plot.png` - RR metrics vs quantum
-- `rr_combined_plot.png` - All RR metrics on one graph
-
-**Requirements:** `matplotlib`, `pandas`, `numpy`
-```bash
-pip3 install matplotlib pandas numpy
+For latency=2, the expected output was:
 ```
+Throughput=0.108108, Avg_Wait=9.00, Avg_TAT=16.00, Avg_RT=8.50
+```
+
+My results matched closely, confirming the aggregation logic was correct.
+
+## Debugging Process
+
+Initially had issues where:
+1. Turnaround time was 10x too small - forgot to aggregate thread burst times
+2. Start time was showing as larger than finish time - was using sum of waiting times instead of actual first start time
+3. Response time calculation was wrong - needed to track first response time properly
+
+Fixed by adding proper tracking of:
+- `first_start` - when the first thread of each PID starts
+- `total_burst` - sum of all thread burst lengths for each PID
+- Calculating waiting as `Turnaround - Total_Burst` instead of summing individual waits
 
 ## Performance Results
 
-| Algorithm | Throughput | Avg Wait Time | Notes |
-|-----------|------------|---------------|-------|
-| FCFS (latency=1) | 0.009710 | 48,947 | Best case |
-| FCFS (latency=200) | 0.003311 | 148,547 | Worst case |
-| RR (quantum=1) | 0.000467 | 1,427,847 | Too much overhead |
-| RR (quantum=200) | 0.008197 | 58,457 | Approaching FCFS |
-| MLFQ | 0.006835 | 92,759 | Balanced approach |
+Results vary based on the specific input file, but general patterns:
 
-## Running on University Servers
+**FCFS:**
+- Linear degradation as latency increases
+- Throughput inversely proportional to latency
+- Waiting time increases linearly
 
-Tested and verified on cslinux.ucalgary.ca:
+**Round Robin:**
+- Poor performance at quantum=1 (excessive context switching)
+- Improves and stabilizes as quantum increases
+- Converges toward FCFS behavior at large quantums
+
+**MLFQ:**
+- Balanced approach between response time and throughput
+- Better than FCFS for mixed workloads
+- Some processes may experience longer waits in lower queues
+
+## Plots
+
+The Python script generates visualization showing how metrics change with:
+- Latency (for FCFS)
+- Quantum size (for Round Robin)
+
+Each plot includes throughput, average waiting time, average turnaround time, and average response time.
+
+## Code Quality
+
+Focused on:
+- **Meaningful names:** `earliest_arrival`, `latest_finish`, `ready_queue`
+- **Clear structure:** Separate functions for simulation vs aggregation
+- **Comments:** Explaining the trickier parts like PID aggregation
+- **Efficiency:** O(n) simulation, proper data structures
+
+## Challenges
+
+The main challenge was understanding the per-process aggregation requirement. The assignment mentions "threads with the same PID" but it wasn't immediately obvious that this fundamentally changes how metrics are calculated. Once I understood that waiting time = turnaround - total_burst (not sum of individual thread waits), everything fell into place.
+
+## Testing on University Servers
+
+Everything compiles and runs on cslinux.ucalgary.ca:
+
 ```bash
 ssh eyuel.kahsay@cslinux.ucalgary.ca
 cd cpsc457_a2
 make runall
 ```
 
+No special dependencies needed beyond standard C libraries and Python with matplotlib/pandas for plotting.
+
 ## Submission Checklist
 
-- [x] All programs compile without warnings
+- [x] Code compiles without warnings
 - [x] Programs run correctly on university servers
 - [x] Output format matches specification
+- [x] PID aggregation implemented correctly
 - [x] Git repository with commit history
-- [x] Code is commented and organized
-- [x] Plots generated and included in PDF report
-- [x] Reflections written for all three parts
+- [x] Code commented and organized
+- [x] Plots generated
+- [x] README complete
 
 ## References
 
-- CPSC 457 Lecture Slides (CPU Scheduling)
+- CPSC 457 Lecture Slides
+- TA's FAQ document on PID aggregation
 - Operating System Concepts - Silberschatz, Galvin, Gagne
-- Assignment 2 Specification Document
